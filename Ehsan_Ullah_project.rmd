@@ -1,0 +1,481 @@
+---
+title: "Project"
+output:
+  html_document:
+    df_print: paged
+  word_document: default
+  pdf_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+# Loading all the libraries first
+
+```{r Libraries}
+if(!require(tidyverse)) 
+  install.packages("tidyverse")
+library(tidyverse)
+##########################################################################
+if(!require(data.table)) 
+  install.packages("data.table")
+library(data.table)
+##########################################################################
+if(!require(caret)) 
+  install.packages("caret")
+library(caret)
+##########################################################################
+if(!require(recommenderlab)) 
+  install.packages("recommenderlab")
+library(recommenderlab)
+##########################################################################
+if(!require(reshape2)) 
+  install.packages("reshape2")
+library(reshape2)
+##########################################################################
+if(!require(knitr)) 
+  install.packages("knitr", repos = "http://cran.us.r-project.org")
+library(knitr)
+
+```
+
+
+
+
+
+
+
+
+
+## Step1
+## importing the data for movies and rating
+```{r}
+movies_data <- read.csv(file.choose(),stringsAsFactors = F, na.strings = c("","?"," ","!"), sep = ",", encoding = "UTF-8")
+ratings_data <- read.csv(file.choose(), stringsAsFactors = F, na.strings = c("","?"," ","!"), encoding = "UTF-8")
+
+summary(movies_data)
+str(movies_data)
+head(movies_data)
+
+summary(ratings_data)
+str(ratings_data)
+head(ratings_data)
+
+```
+
+<!-- ```{r} -->
+<!-- boxplot(movies_data$movieId) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- boxplot(ratings_data$userId) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- boxplot(ratings_data$movieId) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- boxplot(ratings_data$rating) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- boxplot(ratings_data$timestamp) -->
+<!-- ``` -->
+
+
+## Step 2
+##Data exploration and pre-processing
+## For Genres, getting the most popular genres from movies
+
+```{r Most popular genre}
+genres_mostpop <- movies_data %>%
+  separate_rows(genres, sep = "\\|") %>%
+  group_by(genres) %>%
+  summarise(number = n()) %>%
+  arrange(desc(number))
+
+genres_mostpop 
+ggplot(data=genres_mostpop, aes(x= reorder(genres, -number), y=number)) +
+  geom_bar(stat="identity", width=.8)+
+  theme(axis.text.x=element_text(angle=90,hjust=1,vjust=0.5))+
+  ggtitle("Most popular movie genres")
+```
+
+#For ratings, what were the best movies based on users' ratings
+```{r Most popular moives based on ratings}
+ratings_ofMovies <- ratings_data %>%
+  inner_join(movies_data, by = "movieId") %>%
+  na.omit() %>%
+  select(title, rating) %>%
+  group_by(title, rating) %>%
+  summarise(count = n(), mean = mean(rating), min = min(rating), max = max(rating)) %>%
+  ungroup() %>%
+  arrange(desc(mean))
+
+ratings_ofMovies
+```
+
+
+#split genres and make a matrix between genres and films
+
+```{r}
+genreOfMovie <- as.data.frame(movies_data$genres, stringsAsFactors = FALSE)
+genreOfMovie2 <- as.data.frame(tstrsplit(genreOfMovie[,1], "[|]", type.convert = TRUE),stringsAsFactors = FALSE)
+
+colnames(genreOfMovie2) <- c(1:10)
+
+listOfGenres <- c("Action", "Adventure", "Animation", "Children", 
+                "Comedy", "Crime","Documentary", "Drama", "Fantasy",
+                "Film-Noir", "Horror", "Musical", "Mystery","Romance",
+                "Sci-Fi", "Thriller", "War", "Western")
+
+matrixOfGenre <- matrix(0,9743,18)
+matrixOfGenre[1,] <- listOfGenres
+colnames(matrixOfGenre) <- listOfGenres
+
+for (index in 1:nrow(genreOfMovie2)){
+  for(col in 1:ncol(genreOfMovie2)){
+    gen_col = which(matrixOfGenre[1,] == genreOfMovie2[index,col])
+    matrixOfGenre[index+1,gen_col] <- 1
+  }
+}
+
+head(matrixOfGenre)
+
+```
+#Dont want the first row so will get rid of it
+```{r}
+matrixOfGenre2 <- as.data.frame(matrixOfGenre[-1,], stringsAsFactors=FALSE)
+
+for (col in 1:ncol(matrixOfGenre2)) {
+  matrixOfGenre2[,col] <- as.integer(matrixOfGenre2[,col])
+}
+
+head(matrixOfGenre2)
+```
+
+#Now make a search matrix between movies and genres, this will help in finding films based on the genres
+```{r}
+search_matrix <- cbind(movies_data[,1:2], matrixOfGenre2)
+head(search_matrix)
+```
+
+
+
+
+
+
+
+
+
+
+
+#step 3
+
+#look at the number of ratings
+```{r}
+rating_frequency <- as.vector(ratings_data$rating)
+sort(unique(rating_frequency))
+```
+
+#have a table showing frequency of each rating
+```{r}
+table(rating_frequency)
+```
+
+#plot ratings vs frequency,rating values are skewed to the left
+```{r}
+rating_frequency <- factor(rating_frequency)
+qplot(rating_frequency) + ggtitle("Frequency of ratings") + xlab("rating") + ylab("frequency(# of ratings)")
+```
+
+
+
+
+
+
+
+#Create ratings matrix
+```{r}
+ratingmatrix <- dcast(ratings_data, userId~movieId, value.var = "rating", na.rm=FALSE)
+ratingmatrix <- as.matrix(ratingmatrix[,-1])
+
+```
+
+#using the "recommenderlab" package in R and by converting my rating matrix into a sparse matrix of class type "realRatingMatrix
+```{r}
+ratingmatrix <- as(ratingmatrix, "realRatingMatrix")
+ratingmatrix
+```
+
+#explore similarities among users by using the similarity functions which are provided from the "recommenderlab"
+# similarities between users
+```{r}
+similarityOfUsers <- similarity(ratingmatrix[1:6,], method = "cosine", which = "users")
+as.matrix(similarityOfUsers)
+image(as.matrix(similarityOfUsers), main = "Similarity Of Users")
+```
+
+# similarities between movies
+```{r}
+similarityOfMovies <- similarity(ratingmatrix[, 1:6], method = "cosine", which = "items")
+as.matrix(similarityOfMovies)
+image(as.matrix(similarityOfMovies), main = "Similarity Of Movies")
+```
+
+
+#select the most relevant data from both the movies.csv and ratings.csv files
+#first we need to set the threshold for the minimum number of users who have rated a movie as 100 and minimum of 100 views per film because we want to ignore users that provided
+#too few ratings, and also ignore those movies that have  too few ratings from users.
+#Here we restrict the model training to those users who have rated at least 100 movies, and those movies that have been rated by at least 100 users.
+```{r}
+#!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+ratingsOfMovies <- ratingmatrix[rowCounts(ratingmatrix) > 100,colCounts(ratingmatrix) > 100]
+ratingsOfMovies
+
+ratingsVisual <- as.vector(ratingsOfMovies@data)
+ratingsVisual2 <- ratingsVisual[ratingsVisual !=0]
+hist(ratingsVisual2 , main="Histogram of Ratings", xlab="Rating")
+
+```
+
+
+
+#second we will get top 5% of relevant users with movies which follows the approach of getting users who have rated a movie
+```{r}
+min_movies <- quantile(rowCounts(ratingsOfMovies), 0.95)
+min_users <- quantile(colCounts(ratingsOfMovies), 0.95)
+image(ratingsOfMovies[rowCounts(ratingsOfMovies) > min_movies, colCounts(ratingsOfMovies) > min_users], main = "Heatmap of the top users and movies")
+
+
+avgUserRating <- rowMeans(ratingsOfMovies)
+qplot(avgUserRating) + ggtitle("Distribution of the average rating per user")
+
+
+
+```
+
+
+
+#Step 5
+#build a training set and testset #splitting the set into 70% training and 30% testing.Then normalizing the data to get rid of any  bias in the user ratings.
+```{r}
+ratings_sample <- sample(x = c(TRUE, FALSE), size = nrow(ratingsOfMovies), replace = TRUE, prob = c(0.7, 0.3))
+ratings_train <- ratingsOfMovies[ratings_sample, ]
+ratings_test <- ratingsOfMovies[!ratings_sample, ]
+```
+
+```{r}
+ratings_nomralized <- normalize(ratingsOfMovies)
+
+
+ratingsVisual3 <- as.vector(ratings_nomralized@data)
+ratingsVisual4 <- ratingsVisual3[ratingsVisual3 !=0]
+hist(ratingsVisual4 , main="Histogram of Normalized Ratings", xlab="Rating")
+
+#sum(rowMeans(ratings_nomralized) > 0.00001)
+```
+
+#visualize the normalized matrices
+```{r}
+image(ratings_nomralized[rowCounts(ratings_nomralized) > min_movies,
+                          colCounts(ratings_nomralized) > min_users], 
+main = "Heatmap of the top users and movies", xlab = 'Movies', ylab = 'Users')
+
+```
+
+#Create user based collaborative filtering system model for recommending
+# For this we need to find the similarties in one user compared to other users, then find the top-rated items from similar users and recommended it for the given user. In order to do this i will use the Recommender method "UBCF" along with the "cosine" correlation.
+
+# Looking at 100 similar users i will get the first 4 movie reccomendations from the training set for one user
+```{r}
+recommender_UBCF <- Recommender(ratings_train, method = "UBCF", param=list(nn=100))
+predictor<- predict(recommender_UBCF, ratings_train[1], n=4)
+predictor_list <- as(predictor, "list")
+ 
+predictions <- matrix(0,4)
+for (i in c(1:4)){
+ predictions [i] <- search_matrix[as.integer(predictor_list[[1]][i]),2]
+}
+
+predictions 
+```
+
+
+#user based collaborative filtering on a training set and apply the recommender model for top 4 movies 
+```{r}
+reccomendingPredictions_UBCF <- predict(object = recommender_UBCF,
+                          newdata = ratings_test, 
+                          n = 4) 
+reccomendingPredictions_UBCF
+```
+
+# checking results of the user based collaborative filtering recommnder system for top 4 user
+
+```{r}
+reccomendingPredictions_UBCF_results <- sapply(reccomendingPredictions_UBCF@items, 
+                      function(x){ as.integer(colnames(ratingsOfMovies)[x]) })
+reccomendingPredictions_UBCF_results[, 1:4]
+```
+
+
+
+
+# Create an item based collaborative filtering system model for recommending
+# For this we need to find the similarties in items by comparing items which have been given the similar ratings amoungst similar users, then find the top similar items and recommended it. In order to do this i will use the Recommender method "IBCF" along with the "cosine" correlation.
+
+# Looking at 100 similar items i will get the first 4 movie reccomendations from the training set
+```{r}
+recommender_IBCF <- Recommender(data = ratings_train, method = "IBCF", parameter = list(k = 100))
+
+recommender_IBCF
+class(recommender_IBCF)
+
+
+reccomendingPredictions_IBCF <- predict(object = recommender_IBCF,
+                          newdata = ratings_test, 
+                          n = 4) 
+reccomendingPredictions_IBCF
+
+
+predictorForUser <- reccomendingPredictions_IBCF@items[[1]]
+predictorForUser1 <- reccomendingPredictions_IBCF@itemLabels[predictorForUser]
+predictorForUser2 <- predictorForUser1
+for (i in 1:4){
+  predictorForUser2[i] <- as.character(subset(movies_data, 
+                                         movies_data$movieId == predictorForUser1[i])$title)
+}
+predictorForUser2
+
+```
+
+#item based collaborative filtering on a training set and apply the recommender model for top 4 users on the test set
+
+```{r}
+reccomendingPredictions_IBCF <- predict(object = recommender_IBCF, newdata = ratings_test, n = 4)
+reccomendingPredictions_IBCF
+
+```
+
+
+#checking results of the item based collaborative filtering recommnder system for top 4 users
+
+```{r}
+reccomendingPredictions_IBCF_results <- sapply(reccomendingPredictions_IBCF@items, 
+                      function(x){ as.integer(colnames(ratingsOfMovies)[x]) })
+
+reccomendingPredictions_IBCF_results[,1:4]
+```
+
+
+
+
+
+## Step 6
+## Over here I will be evaluating the recommender systems by using cross-validation to validate models. I will be evaluating the ratings and the recommendations. I will also utilize the “evaluate” function in “recommenderlab” package to do so as well 
+
+
+## Evaluate ratings for user based collaborative filtering recommnder system
+
+```{r}
+eval_sets <- evaluationScheme(data = ratingsOfMovies, 
+                              method = "cross-validation",
+                              k = 4, 
+                              given = 5, 
+                              goodRating = 3)
+
+
+model_parameters <- NULL
+
+eval_recommender_UBCF <- Recommender(data = getData(eval_sets, "train"),method = "UBCF", parameter = model_parameters)
+
+items_to_recommend <- 10
+eval_prediction_UBCF <- predict(object = eval_recommender_UBCF, 
+                           newdata = getData(eval_sets, "known"), 
+                           n = items_to_recommend, 
+                           type = "ratings")
+
+
+eval_accuracy_UBCF <- calcPredictionAccuracy(x = eval_prediction_UBCF, 
+                                        data = getData(eval_sets, "unknown"), 
+                                        byUser = FALSE) 
+eval_accuracy_UBCF
+
+
+```
+
+
+## Evaluate ratings for item based collaborative filtering recommnder system
+```{r}
+
+eval_recommender_IBCF <- Recommender(data = getData(eval_sets, "train"),method = "IBCF", parameter = model_parameters)
+
+eval_prediction_IBCF <- predict(object = eval_recommender_IBCF, newdata = getData(eval_sets, "known"), n = items_to_recommend, type = "ratings")
+
+
+eval_accuracy_IBCF <- calcPredictionAccuracy(x = eval_prediction_IBCF, 
+                                        data = getData(eval_sets, "unknown"), 
+                                        byUser = FALSE) 
+eval_accuracy_IBCF
+
+
+
+```
+
+#Since user based collaborative filtering has less RMSE than item based collaborative filtering its better. With that we can answer the question of: With what accuracy can a collaborative filtering recommendation system using an item based collaborative filtering recommendation system and a user based collaborative filtering recommendation system give for recommending movies given the data from movie and user ratings and which one is better to use?
+
+
+
+```{r}
+models_to_evaluate <- list(
+  IBCF_cos = list(name = "IBCF", param = list(method = "cosine")),
+  UBCF_cos = list(name = "UBCF", param = list(method = "cosine")),
+  IBCF_per = list(name = "IBCF", param = list(method = "pearson")),
+  #UBCF_per = list(name = "UBCF", param = list(method = "pearson")),
+  random = list(name = "RANDOM", param=NULL)
+)
+
+n_recommendations <- c(1, 5, seq(10, 100, 10))
+
+list_results <- evaluate(x = eval_sets,
+                    method = models_to_evaluate,
+                    n = n_recommendations)
+
+
+```
+
+#get ROC curves
+
+```{r}
+plot(list_results,
+     annotate = 1,
+     legend = "topleft")
+title("ROC curve")
+
+```
+
+##get precsision and recall curves
+```{r}
+plot(list_results,
+     "prec/rec",
+     annotate = 1,
+     legend = "bottomright")
+title("Precision-recall")
+```
+
+
+```{r}
+
+```
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
